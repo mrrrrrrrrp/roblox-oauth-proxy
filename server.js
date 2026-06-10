@@ -1,8 +1,10 @@
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 const app = express();
 
-const LOCAL_REDIRECT = 'http://localhost:54593/oauth/callback';
+// Store pending logins (in memory – for demo purposes)
+const pendingLogins = new Map();
 
 app.get('/oauth/callback', async (req, res) => {
     const { code, state } = req.query;
@@ -12,10 +14,24 @@ app.get('/oauth/callback', async (req, res) => {
     }
     
     try {
-        await axios.get(LOCAL_REDIRECT, {
-            params: { code, state },
-            timeout: 5000
-        });
+        // Exchange code for token directly from Render
+        const tokenResponse = await axios.post('https://apis.roblox.com/oauth/v1/token',
+            new URLSearchParams({
+                client_id: '3733353280957003172',
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: 'https://roblox-oauth-proxy1.onrender.com/oauth/callback',
+                code_verifier: state
+            }).toString(),
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
+        
+        // Generate a one-time token for your Electron app to claim this login
+        const claimToken = crypto.randomBytes(16).toString('hex');
+        pendingLogins.set(claimToken, tokenResponse.data);
+        
+        // Auto-expire after 5 minutes
+        setTimeout(() => pendingLogins.delete(claimToken), 300000);
         
         res.send(`
             <!DOCTYPE html>
@@ -34,37 +50,31 @@ app.get('/oauth/callback', async (req, res) => {
                 <div class="container">
                     <div class="success">✓</div>
                     <h1>Login Successful!</h1>
-                    <p>You can now close this window and return to your app.</p>
+                    <p>You can now close this window and return to the app.</p>
                     <p class="close-text">This window will close automatically in 3 seconds...</p>
                 </div>
-                <script>setTimeout(() => window.close(), 3000);</script>
+                <script>
+                    fetch('http://localhost:54593/oauth/claim?token=${claimToken}').catch(() => console.log('Could not reach local app'));
+                    setTimeout(() => window.close(), 3000);
+                </script>
             </body>
             </html>
         `);
     } catch (error) {
-        res.status(500).send(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Login Error</title>
-                <style>
-                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f0f; color: #e8e8e8; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-                    .container { text-align: center; background: #1a1a1a; padding: 40px; border-radius: 8px; border: 1px solid #333; }
-                    h1 { color: #CC3333; margin-bottom: 20px; }
-                    .error { color: #CC3333; font-size: 48px; margin-bottom: 20px; }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="error">✗</div>
-                    <h1>Login Error</h1>
-                    <p>Could not connect to your local application.</p>
-                    <p>Make sure Roblox Account Manager is running.</p>
-                </div>
-                <script>setTimeout(() => window.close(), 5000);</script>
-            </body>
-            </html>
-        `);
+        console.error(error);
+        res.status(500).send('Login failed');
+    }
+});
+
+// Endpoint for Electron app to claim the login result
+app.get('/claim/:token', (req, res) => {
+    const token = req.params.token;
+    const data = pendingLogins.get(token);
+    if (data) {
+        pendingLogins.delete(token);
+        res.json(data);
+    } else {
+        res.status(404).json({ error: 'Not found or expired' });
     }
 });
 
