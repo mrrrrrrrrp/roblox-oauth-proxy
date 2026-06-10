@@ -3,25 +3,29 @@ const axios = require('axios');
 const crypto = require('crypto');
 const app = express();
 
-// Store pending logins (in memory – for demo purposes)
+// Store pending logins with both token and verifier
 const pendingLogins = new Map();
 
 app.get('/oauth/callback', async (req, res) => {
-    const { code, state } = req.query;
+    const { code, state, verifier } = req.query;
     
     if (!code) {
         return res.status(400).send('Missing authorization code');
     }
     
+    if (!verifier) {
+        return res.status(400).send('Missing code verifier');
+    }
+    
     try {
-        // Exchange code for token directly from Render
+        // Exchange code for token using the verifier from the query
         const tokenResponse = await axios.post('https://apis.roblox.com/oauth/v1/token',
             new URLSearchParams({
                 client_id: '3733353280957003172',
                 grant_type: 'authorization_code',
                 code: code,
                 redirect_uri: 'https://roblox-oauth-proxy1.onrender.com/oauth/callback',
-                code_verifier: state
+                code_verifier: verifier
             }).toString(),
             { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
@@ -61,8 +65,8 @@ app.get('/oauth/callback', async (req, res) => {
             </html>
         `);
     } catch (error) {
-        console.error(error);
-        res.status(500).send('Login failed');
+        console.error('Token exchange failed:', error.response?.data || error.message);
+        res.status(500).send('Login failed: ' + (error.response?.data?.error_description || error.message));
     }
 });
 
