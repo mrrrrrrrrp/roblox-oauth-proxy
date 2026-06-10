@@ -3,22 +3,25 @@ const axios = require('axios');
 const crypto = require('crypto');
 const app = express();
 
-// Store pending logins with both token and verifier
 const pendingLogins = new Map();
 
 app.get('/oauth/callback', async (req, res) => {
-    const { code, state, verifier } = req.query;
+    const { code, state } = req.query;
     
     if (!code) {
         return res.status(400).send('Missing authorization code');
     }
     
-    if (!verifier) {
-        return res.status(400).send('Missing code verifier');
+    // Parse the state JSON to get the verifier
+    let stateData, verifier;
+    try {
+        stateData = JSON.parse(state);
+        verifier = stateData.verifier;
+    } catch (e) {
+        return res.status(400).send('Invalid state parameter');
     }
     
     try {
-        // Exchange code for token using the verifier from the query
         const tokenResponse = await axios.post('https://apis.roblox.com/oauth/v1/token',
             new URLSearchParams({
                 client_id: '3733353280957003172',
@@ -30,11 +33,8 @@ app.get('/oauth/callback', async (req, res) => {
             { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
         
-        // Generate a one-time token for your Electron app to claim this login
         const claimToken = crypto.randomBytes(16).toString('hex');
         pendingLogins.set(claimToken, tokenResponse.data);
-        
-        // Auto-expire after 5 minutes
         setTimeout(() => pendingLogins.delete(claimToken), 300000);
         
         res.send(`
@@ -66,11 +66,10 @@ app.get('/oauth/callback', async (req, res) => {
         `);
     } catch (error) {
         console.error('Token exchange failed:', error.response?.data || error.message);
-        res.status(500).send('Login failed: ' + (error.response?.data?.error_description || error.message));
+        res.status(500).send('Login failed');
     }
 });
 
-// Endpoint for Electron app to claim the login result
 app.get('/claim/:token', (req, res) => {
     const token = req.params.token;
     const data = pendingLogins.get(token);
